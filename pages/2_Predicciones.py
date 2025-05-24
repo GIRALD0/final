@@ -15,9 +15,35 @@ st.set_page_config(page_title="Predicciones Tarifas", page_icon="🔮", layout="
 st.title("📈 Predicciones de Tarifas de Servicios Públicos")
 st.markdown("Análisis detallado de predicciones de tarifas utilizando diferentes modelos")
 
+# =============================================
+# FUNCIONES AUXILIARES 
+# =============================================
 
+def hex_to_rgba(hex_color, alpha=0.2):
+    """
+    Convierte un color hexadecimal a formato RGBA
+    
+    Args:
+        hex_color: Color en formato hexadecimal
+        alpha: Valor de transparencia (0-1)
+        
+    Returns:
+        str: Color en formato rgba(r,g,b,alpha)
+    """
+    hex_color = hex_color.lstrip('#')
+    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return f'rgba({r},{g},{b},{alpha})'
 
 def crear_engine():
+    """
+    Crea el engine de conexión a la base de datos PostgreSQL
+    
+    Returns:
+        sqlalchemy.Engine: Engine de conexión configurado
+        
+    Raises:
+        Exception: Si hay error en la conexión
+    """
     try:
         load_dotenv()
         DB_USER = os.getenv("DB_USER")
@@ -31,21 +57,108 @@ def crear_engine():
         st.error("Error al conectar con la base de datos.")
         st.stop()
 
+def validar_columnas_requeridas(df, columnas_requeridas):
+    """
+    Valida que un DataFrame contenga las columnas requeridas
+    
+    Args:
+        df: DataFrame a validar
+        columnas_requeridas: Lista de columnas que deben estar presentes
+        
+    Returns:
+        bool: True si todas las columnas están presentes, False en caso contrario
+    """
+    return all(col in df.columns for col in columnas_requeridas)
+
+def filtrar_datos_por_parametros(df, municipio, estrato, servicio):
+    """
+    Filtra el DataFrame por los parámetros especificados
+    
+    Args:
+        df: DataFrame a filtrar
+        municipio: Nombre del municipio
+        estrato: Número del estrato
+        servicio: Tipo de servicio
+        
+    Returns:
+        pd.DataFrame: DataFrame filtrado
+    """
+    return df[
+        (df['Municipio'] == municipio) &
+        (df['Estrato'] == estrato) &
+        (df['Servicio'] == servicio)
+    ].sort_values('Fecha')
+
+def preparar_serie_temporal(df_filtrado):
+    """
+    Prepara los datos para modelos de series temporales
+    
+    Args:
+        df_filtrado: DataFrame filtrado con datos de tarifas
+        
+    Returns:
+        pd.DataFrame: DataFrame con columnas 'ds' (fecha) y 'y' (valor)
+    """
+    return df_filtrado[['Fecha', 'Cargo Fijo']].rename(columns={'Fecha': 'ds', 'Cargo Fijo': 'y'})
+
+def calcular_metricas_modelo(y_true, y_pred):
+    """
+    Calcula métricas de evaluación para modelos de predicción
+    
+    Args:
+        y_true: Valores reales
+        y_pred: Valores predichos
+        
+    Returns:
+        dict: Diccionario con métricas MAPE y RMSE
+    """
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+    
+    return {
+        'MAPE': mape,
+        'RMSE': rmse
+    }
+
+# =============================================
+# CONFIGURACIÓN Y CARGA DE DATOS
+# =============================================
+
 engine = crear_engine()
 
 @st.cache_data
 def cargar_datos():
     try:
+        # Intentar cargar desde base de datos primero
         query = "SELECT * FROM tarifas_acueductos_aguas_residuales_med_ing_caracteristicas"
         df = pd.read_sql(query, engine)
         df['Fecha'] = pd.to_datetime(df['Fecha'])
         return df
     except Exception as e:
-        st.error("Error al cargar los datos desde la base de datos.")
-        st.exception(e)
-        return pd.DataFrame()  
+        # Si falla la BD, intentar cargar desde archivo CSV
+        try:
+            # Intentar diferentes codificaciones
+            for encoding in ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']:
+                try:
+                    df = pd.read_csv('data/tarifas_con_indicadores.csv', encoding=encoding)
+                    df['Fecha'] = pd.to_datetime(df['Fecha'])
+                    return df
+                except UnicodeDecodeError:
+                    continue
+            
+            # Si todas las codificaciones fallan, mostrar error
+            st.error("Error al cargar los datos desde la base de datos y el archivo CSV.")
+            st.exception(e)
+            return pd.DataFrame()
+            
+        except Exception as csv_error:
+            st.error("Error al cargar los datos desde la base de datos y el archivo CSV.")
+            st.exception(csv_error)
+            return pd.DataFrame()
 
-
+# =============================================
+# CARGA Y VALIDACIÓN DE DATOS
+# =============================================
 
 df = cargar_datos()
 
@@ -57,17 +170,6 @@ requeridas = ['Fecha', 'Municipio', 'Estrato', 'Servicio', 'Cargo Fijo']
 if not all(col in df.columns for col in requeridas):
     st.error("La base de datos no contiene todas las columnas necesarias.")
     st.stop()
-
-
-# Función para convertir HEX a RGBA
-def hex_to_rgba(hex_color, alpha=0.2):
-    hex_color = hex_color.lstrip('#')
-    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-    return f'rgba({r},{g},{b},{alpha})'
-
-# Cargar datos reales
-#df = pd.read_excel("tarifas_con_indicadores_excel.xlsx")
-
 
 # Filtros
 col1, col2, col3 = st.columns(3)
