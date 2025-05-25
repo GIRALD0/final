@@ -9,6 +9,11 @@ import numpy as np
 import os
 import tempfile
 import shutil
+from selenium.webdriver.chrome.options import Options
+import subprocess
+import requests
+import time
+from selenium import webdriver
 from unittest.mock import Mock, patch, MagicMock
 import geopandas as gpd
 from shapely.geometry import Point, Polygon
@@ -324,6 +329,72 @@ def assert_map_properties():
     
     return _assert_map
 
+@pytest.fixture(scope="function") # 'function' para un driver limpio por test
+def driver():
+    """
+    Fixture para inicializar y cerrar el WebDriver de Selenium (Chrome Headless).
+    """
+    print("\n    >>> Iniciando WebDriver de Selenium...")
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    
+        
+    d = webdriver.Chrome(options=chrome_options)
+    d.implicitly_wait(5) # Una espera implícita base
+    
+    yield d # Proporciona el driver al test
+    
+    print("\n    <<< Cerrando WebDriver de Selenium...")
+    d.quit() # Cierra el driver después del test
+
+@pytest.fixture(scope="module")
+def setup_streamlit_home_app():
+    """
+    Fixture para iniciar la aplicación Streamlit principal (Home) para tests E2E.
+    """
+    print("\n    >>> Iniciando Streamlit App (Home) en puerto 8501...")
+    process = subprocess.Popen([
+        "streamlit", "run", "home.py",
+        "--server.port", "8501", 
+        "--server.headless", "true",
+        "--logger.level", "error" 
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    max_attempts = 45
+    url = "http://localhost:8501"
+    ready = False
+    for attempt in range(max_attempts):
+        try:
+            response = requests.get(url, timeout=2)
+            # Hacemos la verificación un poco más genérica para el arranque inicial
+            if response.status_code == 200 and "streamlit" in response.text.lower(): 
+                print(f"\n    ✅ Streamlit App (Home) lista en {url}")
+                ready = True
+                break
+        except requests.exceptions.RequestException:
+            pass 
+        print(f"    ... Esperando Streamlit (intento {attempt+1}/{max_attempts})")
+        time.sleep(2)
+
+    if not ready:
+        if process.poll() is not None: # Verificar si el proceso terminó inesperadamente
+            print(f"    ❌ El proceso de Streamlit terminó con código: {process.returncode}")
+        process.terminate()
+        pytest.fail(f"❌ No se pudo iniciar la aplicación Streamlit (Home) en el puerto {url}.")
+        
+    yield url 
+    
+    print("\n    <<< Deteniendo Streamlit App (Home)...")
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
 # ========== MARKERS Y PARAMETRIZACIÓN ==========
 
 # Markers para categorización de tests
@@ -337,5 +408,6 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: Tests end-to-end")
     config.addinivalue_line("markers", "visor_geografico: Tests del visor geográfico")
     config.addinivalue_line("markers", "predicciones: Tests del módulo de predicciones")
+    config.addinivalue_line("markers", "home: Tests del módulo Home")
     config.addinivalue_line("markers", "slow: Tests que tardan más tiempo")
     config.addinivalue_line("markers", "database: Tests que requieren base de datos") 

@@ -178,9 +178,12 @@ def run_specific_module(module_name):
     elif module_name == "predicciones":
         marker = "predicciones"
         test_file = "tests/test_predicciones.py"
+    elif module_name == "home":
+        marker = "home"
+        test_file = "tests/test_home.py"
     else:
-        print("❌ Módulo no reconocido. Use 'visor' o 'predicciones'")
-        return 1
+        print("❌ Módulo no reconocido. Use 'visor', 'predicciones' o 'home'")
+        return 
     
     args = [
         "--verbose",
@@ -295,9 +298,10 @@ def main():
     print("2. Solo tests del Visor Geográfico")
     print("3. Solo tests de Predicciones") 
     print("4. Solo tests Unitarios")
-    print("5. Solo tests de Integración")
-    print("6. Solo tests Paramétricos")
-    print("7. Solo tests E2E")
+    print("5. Solo tests de Home")
+    print("6. Solo tests de Integración")
+    print("7. Solo tests Paramétricos")
+    print("8. Solo tests E2E")
     print("0. Salir")
     
     try:
@@ -312,13 +316,15 @@ def main():
             return run_specific_module("visor")
         elif choice == "3":
             return run_specific_module("predicciones")
-        elif choice == "4":
-            return run_by_type("unit")
+        elif choice == "4": 
+            return run_specific_module("home")
         elif choice == "5":
-            return run_by_type("integration")
+            return run_by_type("unit")
         elif choice == "6":
-            return run_by_type("parametric")
+            return run_by_type("integration")
         elif choice == "7":
+            return run_by_type("parametric")
+        elif choice == "8":
             return run_by_type("e2e")
         else:
             print("❌ Opción no válida")
