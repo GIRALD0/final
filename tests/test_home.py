@@ -75,13 +75,46 @@ def mock_st_selectbox_dynamic(label, options, index=0, key=None, help=None):
     if options and len(options) > index: return options[index]
     return "MockedSelectboxDefaultValue"
 
+# =============================================================================
+# CONFIGURACIÓN DETALLADA DE MOCKS DE PROPHET (Nivel de módulo de test)
+# Esta configuración será usada tanto por load_home_module como por los tests de integración.
+# =============================================================================
+# 1. Mock para la INSTANCIA de Prophet (lo que Prophet() devuelve)
+prophet_instance_mock = MagicMock(name="ConfiguredProphetInstanceMock")
 
+# Configurar los métodos de la instancia mock para que devuelvan DataFrames válidos
+# Esto es crucial para que home.py no falle durante su carga en load_home_module
+# y para que los tests de integración puedan verificar las llamadas.
+_mock_prophet_dates_for_load_and_integration = pd.to_datetime([
+    '2023-01-01', '2023-02-01', '2023-03-01', '2023-04-01', 
+    '2023-05-01', '2023-06-01', '2023-07-01', '2023-08-01', 
+    '2023-09-01', '2023-10-01', '2023-11-01', '2023-12-01', # Histórico + Futuro para 12 periodos
+    '2024-01-01', '2024-02-01', '2024-03-01' # Más fechas si make_future_dataframe crea más
+])
+prophet_instance_mock.fit = MagicMock(name="ProphetFitMock")
+prophet_instance_mock.make_future_dataframe.return_value = pd.DataFrame({'ds': _mock_prophet_dates_for_load_and_integration[:12+3]}) # Ejemplo de 12 periodos futuros
+prophet_instance_mock.predict.return_value = pd.DataFrame({
+    'ds': _mock_prophet_dates_for_load_and_integration[:12+3], 
+    'yhat': np.random.rand(15) * 1000 + 17000, 
+    'yhat_lower': np.random.rand(15) * 1000 + 16000, 
+    'yhat_upper': np.random.rand(15) * 1000 + 18000
+})
+
+# 2. Mock para la CLASE Prophet. Cuando se llame Prophet(...), devolverá prophet_instance_mock
+prophet_class_mock = MagicMock(name="ConfiguredProphetClassMock", return_value=prophet_instance_mock)
+
+# 3. Asegurar que sys.modules['prophet'].Prophet ES nuestro mock de clase configurado
+# Esto es para que `from prophet import Prophet` en home.py obtenga nuestro mock.
+if 'prophet' not in sys.modules:
+    sys.modules['prophet'] = MagicMock(name="GlobalProphetMockModule")
+sys.modules['prophet'].Prophet = prophet_class_mock
+# --- Fin de configuración de mocks de Prophet ---
 
 # =============================================
 # FUNCIÓN PARA CARGAR home.py COMO MÓDULO
 # =============================================
 def load_home_module():
-    global _loaded_home_module_for_mock
+    global _loaded_home_module_for_mock, prophet_class_mock
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     if project_root not in sys.path: sys.path.insert(0, project_root)
@@ -139,7 +172,7 @@ def load_home_module():
          patch('streamlit.error', MagicMock(name="Mock_st.error_load")), \
          patch('streamlit.stop', MagicMock(side_effect=SystemExit("Mocked st.stop"), name="Mock_st.stop_load")), \
          patch('streamlit.cache_data', lambda func: lambda *args, **kwargs: func(*args, **kwargs)), \
-         patch('prophet.Prophet', return_value=prophet_mock_for_load_during_exec), \
+         patch('prophet.Prophet', prophet_class_mock), \
          patch('sqlalchemy.create_engine', MagicMock(return_value=Mock(name="GlobalLoadMockSqlAlchemyEngine"))), \
          patch('pandas.read_sql', MagicMock(return_value=mock_df_for_load, name="LoadTimeMockPandasReadSql")), \
          patch('dotenv.load_dotenv', MagicMock(name="LoadTimeMockDotenvLoadDotenv")):
@@ -227,28 +260,58 @@ class TestIntegracionHome:
             assert not df_filtrado_simulado.empty
 
     def test_flujo_prediccion_prophet_mockeado(self, sample_tarifas_dataframe):
-        home_module = load_home_module()
-        # El Prophet mockeado globalmente en load_home_module será usado.
-        # Aquí verificamos la interacción si Prophet es llamado por una lógica que estamos probando.
-        df_filtrado = sample_tarifas_dataframe[(sample_tarifas_dataframe['Municipio'] == 'Medellín') & (sample_tarifas_dataframe['Estrato'] == 1) & (sample_tarifas_dataframe['Servicio'] == 'Acueducto')]
-        if len(df_filtrado) < 2 : pytest.skip("Datos insuficientes.")
-        df_prophet_input = df_filtrado[['Fecha', 'Cargo Fijo']].rename(columns={'Fecha': 'ds', 'Cargo Fijo': 'y'})
+        home_module = load_home_module() # load_home_module usa el prophet_class_mock global
         
-        # Acceder al mock de Prophet que fue configurado en load_home_module
-        prophet_mock_class_in_module = sys.modules['prophet'].Prophet
-        prophet_mock_instance_in_module = prophet_mock_class_in_module.return_value
+        # Referenciar los mocks globales definidos a nivel de módulo de test
+        # con los nombres correctos que tienes en tu configuración global.
+        clase_prophet_mock_a_verificar = prophet_class_mock 
+        instancia_prophet_mock_a_verificar = prophet_instance_mock
 
-        # Simular la lógica de home.py
-        modelo = home_module.Prophet(interval_width=0.95) # Llama a Prophet() -> mock_prophet_load_instance
+        # Resetear mocks para aserciones limpias específicas a este test
+        clase_prophet_mock_a_verificar.reset_mock()
+        instancia_prophet_mock_a_verificar.reset_mock()
+        
+        # Reconfigurar return_values para la instancia mock, ya que reset_mock() los borra.
+        # Esto asegura que la lógica del test funcione con DataFrames con la estructura esperada.
+        _test_prophet_future_dates = pd.to_datetime([f"2024-{i:02d}-01" for i in range(1, 13)])
+        
+        instancia_prophet_mock_a_verificar.make_future_dataframe.return_value = pd.DataFrame({'ds': _test_prophet_future_dates})
+        instancia_prophet_mock_a_verificar.predict.return_value = pd.DataFrame({
+            'ds': _test_prophet_future_dates, 
+            'yhat': np.random.uniform(15000, 25000, 12), 
+            'yhat_lower': np.random.uniform(14000, 24000, 12), 
+            'yhat_upper': np.random.uniform(16000, 26000, 12)
+        })
+        # No es necesario re-mockear .fit() aquí si solo necesitas que sea un MagicMock callable.
+        # instancia_prophet_mock_a_verificar.fit = MagicMock(name="FitCalledInThisTest")
+
+
+        # Preparar datos de entrada para la lógica de Prophet
+        df_filtrado = sample_tarifas_dataframe[
+            (sample_tarifas_dataframe['Municipio'] == 'Medellín') &
+            (sample_tarifas_dataframe['Estrato'] == 1) &
+            (sample_tarifas_dataframe['Servicio'] == 'Acueducto')
+        ]
+        if len(df_filtrado) < 2:
+            pytest.skip("Datos de prueba filtrados insuficientes para Prophet.")
+        
+        df_prophet_input = df_filtrado[['Fecha', 'Cargo Fijo']].rename(columns={'Fecha': 'ds', 'Cargo Fijo': 'y'})
+
+        # --- Simular la lógica de home.py ---
+        modelo = home_module.Prophet(interval_width=0.95) 
         modelo.fit(df_prophet_input)
-        future_df = modelo.make_future_dataframe(periods=12, freq='M')
+        future_df = modelo.make_future_dataframe(periods=12, freq='M') 
         forecast = modelo.predict(future_df)
+        # --- Fin de la simulación ---
 
-        prophet_mock_class_in_module.assert_called_with(interval_width=0.95) # Verifica la creación
-        prophet_mock_instance_in_module.fit.assert_called_with(df_prophet_input)
-        prophet_mock_instance_in_module.make_future_dataframe.assert_called_with(periods=12, freq='M')
-        prophet_mock_instance_in_module.predict.assert_called_with(future_df)
+        # Aserciones
+        clase_prophet_mock_a_verificar.assert_called_with(interval_width=0.95)
+        instancia_prophet_mock_a_verificar.fit.assert_called_with(df_prophet_input)
+        instancia_prophet_mock_a_verificar.make_future_dataframe.assert_called_with(periods=12, freq='M')
+        instancia_prophet_mock_a_verificar.predict.assert_called_with(future_df)
+        
         assert not forecast.empty
+        assert 'yhat' in forecast.columns
     
     def test_generacion_grafico_principal_mockeado(self, sample_tarifas_dataframe):
         home_module = load_home_module()
