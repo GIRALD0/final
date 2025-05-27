@@ -110,6 +110,7 @@ def run_test_suite():
     print("-" * 60)
     
     coverage_args = base_args + [
+        "--cov=home",
         "--cov=pages",
         "--cov=tests/utils",
         "--cov-report=html:tests/coverage_html",
